@@ -119,12 +119,16 @@
  * (v8-v23 callee-saved), neither of which a declaration written here would
  * match, so include it and use those declarations rather than repeating them.
  *
- * __ADVSIMD_VEC_MATH_SUPPORTED is glibc's own record of whether it made them,
- * which is a better gate than restating the compiler-version test it is made
- * of: where glibc stayed silent there is nothing to call.
+ * Whether it made them at all depends on the compiler, and the macro recording
+ * that decision (__ADVSIMD_VEC_MATH_SUPPORTED) is undefined again at the end of
+ * the header. __vpcs is not: it is defined in the same block, for the same
+ * reason, and survives inclusion. So it answers the only question that matters
+ * here -- are those declarations in scope -- without restating the
+ * compiler-version test behind it. Where glibc stayed silent, there is nothing
+ * to call and the overloads simply forward.
  */
 #include <math.h>
-#if defined __GLIBC_PREREQ && defined __ADVSIMD_VEC_MATH_SUPPORTED
+#if defined __GLIBC_PREREQ && defined __vpcs
 
 #if __GLIBC_PREREQ(2, 38)
 #define VIR_HAVE_SIMD_VECMATH 1
@@ -139,7 +143,7 @@
 #define VIR_VECMATH_HAVE_POW 1
 #endif
 
-#endif // __GLIBC_PREREQ && __ADVSIMD_VEC_MATH_SUPPORTED
+#endif // __GLIBC_PREREQ && __vpcs
 #endif // __aarch64__
 
 #ifdef VIR_HAVE_SIMD_VECMATH
