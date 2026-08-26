@@ -242,30 +242,45 @@ template <typename V>
 	test_values<V>({norm_min, denorm_min, 0.5, 1., 2., max, inf, nan}, {5000, denorm_min, max},
 		       VECMATH_TESTER(log));
 
-	// and the ones it grew in 2.35
-	const bool ext = vecmath and group2_routed and group3_routed;
-	FloatExceptCompare::ignore = ext;
-	vir::test::setFuzzyness<float>(ext ? 4 : 1);
-	vir::test::setFuzzyness<double>(ext ? 4 : 1);
+	/* Groups 2 and 3 are tested apart, because the two architectures do not
+	 * grow them together: x86-64 got both in 2.35, AArch64 got group 2 in 2.39
+	 * and group 3 only in 2.40. On such a glibc one group is routed and the
+	 * other is not, and the two want different tolerances -- and different
+	 * answers about whether the scalar routines' exception flags are
+	 * reproduced at all.
+	 */
+	const bool g2 = vecmath and group2_routed;
+	FloatExceptCompare::ignore = g2;
+	vir::test::setFuzzyness<float>(g2 ? 4 : 1);
+	vir::test::setFuzzyness<double>(g2 ? 4 : 1);
 
 	test_values<V>(edge_values, {5000},
-		       VECMATH_TESTER(tan), VECMATH_TESTER(atan),
-		       VECMATH_TESTER(erf), VECMATH_TESTER(erfc));
-	test_values<V>(edge_values, {5000},
-		       VECMATH_TESTER(sinh), VECMATH_TESTER(cosh), VECMATH_TESTER(tanh),
-		       VECMATH_TESTER(asinh), VECMATH_TESTER(cbrt));
+		       VECMATH_TESTER(tan), VECMATH_TESTER(atan));
 	test_values<V>(edge_values, {5000},
 		       VECMATH_TESTER(exp2), VECMATH_TESTER(expm1));
 	test_values<V>({-1., -0.5, +0., -0., 0.5, 1., denorm_min, nan}, {5000, T(-1), T(1)},
-		       VECMATH_TESTER(asin), VECMATH_TESTER(acos), VECMATH_TESTER(atanh));
-	test_values<V>({1., 1.5, 2., max, inf, nan}, {5000, T(1), max},
-		       VECMATH_TESTER(acosh));
+		       VECMATH_TESTER(asin), VECMATH_TESTER(acos));
 	test_values<V>({norm_min, denorm_min, 0.5, 1., 2., max, inf, nan}, {5000, denorm_min, max},
 		       VECMATH_TESTER(log2), VECMATH_TESTER(log10));
 	test_values<V>({-1., -0.5, +0., -0., 0.5, 1., max, inf, nan}, {5000, T(-1), max},
 		       VECMATH_TESTER(log1p));
 	test_values_2arg<V>({+0., -0., 0.5, 1., 2., 3., inf, -inf, nan, norm_min, max},
 			    {5000}, VECMATH_TESTER(atan2));
+
+	const bool g3 = vecmath and group3_routed;
+	FloatExceptCompare::ignore = g3;
+	vir::test::setFuzzyness<float>(g3 ? 4 : 1);
+	vir::test::setFuzzyness<double>(g3 ? 4 : 1);
+
+	test_values<V>(edge_values, {5000},
+		       VECMATH_TESTER(erf), VECMATH_TESTER(erfc));
+	test_values<V>(edge_values, {5000},
+		       VECMATH_TESTER(sinh), VECMATH_TESTER(cosh), VECMATH_TESTER(tanh),
+		       VECMATH_TESTER(asinh), VECMATH_TESTER(cbrt));
+	test_values<V>({-1., -0.5, +0., -0., 0.5, 1., denorm_min, nan}, {5000, T(-1), T(1)},
+		       VECMATH_TESTER(atanh));
+	test_values<V>({1., 1.5, 2., max, inf, nan}, {5000, T(1), max},
+		       VECMATH_TESTER(acosh));
 
 	const bool pw = vecmath and pow_routed;
 	FloatExceptCompare::ignore = pw;
