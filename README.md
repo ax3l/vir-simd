@@ -305,7 +305,9 @@ transcendental functions, so `simd` implementations evaluate `sin`, `exp`,
 therefore end up slower than the scalar one it replaced. Where glibc's
 `libmvec` is available, the functions in `vir::vecmath` hand a whole register
 to it instead, by calling its entry points directly. No compiler flags and no
-auto-vectorization are involved.
+auto-vectorization are involved. Covered are x86-64, from SSE2 up to AVX-512,
+and AArch64 AdvSIMD. AArch64 SVE is not: its entry points are masked and
+vector-length-agnostic, which does not fit the fixed-width chunking used here.
 
 Covered are: `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `sinh`, `cosh`,
 `tanh`, `asinh`, `acosh`, `atanh`, `exp`, `exp2`, `expm1`, `log`, `log2`,
@@ -318,13 +320,22 @@ using-declaration changes that.
 `hypot`, `sqrt` and `abs` are deliberately absent: implementations already
 evaluate those with SIMD instructions, so use `vir::stdx` for them.
 
-Every name is declared in every configuration. Where no vector math library is
-reachable — a glibc older than 2.22 (use 2.35+ for full coverage of the list above),
-a different libc, another architecture, or
-a build with `VIR_DISABLE_SIMD_VECMATH` defined — the call forwards to the
-underlying implementation and behaves exactly as before. Note that the relevant
-glibc is the one you *build* against, so a toolchain with an old sysroot
-forwards even on a recent host.
+Every name is declared in every configuration, including the functions this
+glibc has no vector variant for. glibc grew `libmvec` in stages, and in a
+different order per architecture, so which ones are actually routed differs:
+
+| | x86-64 | AArch64 |
+|---|---|---|
+| `sin` `cos` `exp` `log` | 2.22 | 2.38 |
+| `tan` `asin` `acos` `atan` `atan2` `exp2` `expm1` `log2` `log10` `log1p` | 2.35 | 2.39 |
+| `sinh` `cosh` `tanh` `asinh` `acosh` `atanh` `cbrt` `erf` `erfc` | 2.35 | 2.40 |
+| `pow` | 2.22 | 2.40 |
+
+Where no vector math library is reachable — too old a glibc, a different libc,
+another architecture, or a build with `VIR_DISABLE_SIMD_VECMATH` defined — the
+call forwards to the underlying implementation and behaves exactly as before.
+Note that the relevant glibc is the one you *build* against, so a toolchain
+with an old sysroot forwards even on a recent host.
 
 > **Accuracy.** Vector math libraries trade accuracy for speed: glibc documents
 > a maximum error of 4 ULP for `libmvec`, where its scalar routines stay below
