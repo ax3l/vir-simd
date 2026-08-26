@@ -114,7 +114,17 @@
  */
 #if defined __aarch64__ && defined __GLIBC__ \
       && defined VIR_HAVE_STD_SIMD && !defined VIR_DISABLE_SIMD_VECMATH
-#ifdef __GLIBC_PREREQ
+/* Unlike on x86-64, glibc declares the AdvSIMD entry points itself, in
+ * <math.h>. They take its own NEON vector types and use the vector PCS
+ * (v8-v23 callee-saved), neither of which a declaration written here would
+ * match, so include it and use those declarations rather than repeating them.
+ *
+ * __ADVSIMD_VEC_MATH_SUPPORTED is glibc's own record of whether it made them,
+ * which is a better gate than restating the compiler-version test it is made
+ * of: where glibc stayed silent there is nothing to call.
+ */
+#include <math.h>
+#if defined __GLIBC_PREREQ && defined __ADVSIMD_VEC_MATH_SUPPORTED
 
 #if __GLIBC_PREREQ(2, 38)
 #define VIR_HAVE_SIMD_VECMATH 1
@@ -129,7 +139,7 @@
 #define VIR_VECMATH_HAVE_POW 1
 #endif
 
-#endif // __GLIBC_PREREQ
+#endif // __GLIBC_PREREQ && __ADVSIMD_VEC_MATH_SUPPORTED
 #endif // __aarch64__
 
 #ifdef VIR_HAVE_SIMD_VECMATH
@@ -137,7 +147,26 @@
 namespace vir::vecmath_detail
 {
   template <typename T, int Width>
-    using vec [[gnu::vector_size(Width * sizeof(T))]] = T;
+    struct vec_type
+    { using type [[gnu::vector_size(Width * sizeof(T))]] = T; };
+
+#ifdef __aarch64__
+  /* A vector_size(16) double and __Float64x2_t are layout-compatible but
+   * distinct types, and only the latter matches what <math.h> declared. Since
+   * these are also the chunk types handed to the entry points, spelling them
+   * glibc's way here is what keeps the call well-formed.
+   */
+  template <>
+    struct vec_type<double, 2>
+    { using type = __f64x2_t; };
+
+  template <>
+    struct vec_type<float, 4>
+    { using type = __f32x4_t; };
+#endif
+
+  template <typename T, int Width>
+    using vec = typename vec_type<T, Width>::type;
 
   using v2d = vec<double, 2>;
   using v4d = vec<double, 4>;
@@ -277,6 +306,12 @@ namespace vir::vecmath_detail
 #  define VIR_VECMATH_DECL_2_256(name)
 #endif
 
+#if defined __aarch64__
+/* Already declared by <math.h>; see the note next to the include. */
+#  define VIR_VECMATH_DECL_1(name)
+#  define VIR_VECMATH_DECL_2(name)
+#else
+
 #define VIR_VECMATH_DECL_1(name)                                                                   \
   extern "C" {                                                                                     \
     vir::vecmath_detail::v2d VIR_VECMATH_SYM(VIR_VECMATH_ISA128, N2v_##name)                       \
@@ -296,6 +331,8 @@ namespace vir::vecmath_detail
     VIR_VECMATH_DECL_2_256(name)                                                                   \
     VIR_VECMATH_DECL_2_512(name)                                                                   \
   }
+
+#endif // __aarch64__
 
 /* Selecting the entry point for one chunk
  *
