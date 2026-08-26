@@ -27,10 +27,20 @@
  * that declared them, so the tolerance has to follow the same split rather
  * than the simd's width alone.
  */
-#ifdef VIR_HAVE_SIMD_VECMATH_EXTENDED
-constexpr bool extended_routed = true;
+#ifdef VIR_VECMATH_GROUP2
+constexpr bool group2_routed = true;
 #else
-constexpr bool extended_routed = false;
+constexpr bool group2_routed = false;
+#endif
+#ifdef VIR_VECMATH_GROUP3
+constexpr bool group3_routed = true;
+#else
+constexpr bool group3_routed = false;
+#endif
+#ifdef VIR_VECMATH_HAVE_POW
+constexpr bool pow_routed = true;
+#else
+constexpr bool pow_routed = false;
 #endif
 
 #define VECMATH_TESTER(name_)                                                                      \
@@ -162,23 +172,28 @@ template <typename T, int... Widths>
     const std::initializer_list<T> above_one
       = {T(1), T(1.5), T(2), T(3), T(10), T(1.25), T(5), T(100)};
 
-    constexpr bool base = true;             // sin cos exp log pow, since glibc 2.22
-    constexpr bool ext = extended_routed;   // the rest, since glibc 2.35
+    /* Which group a function belongs to decides whether it is routed at all,
+     * and the two architectures grew them in a different order.
+     */
+    constexpr bool g1 = true;               // sin cos exp log, always where routed
+    constexpr bool g2 = group2_routed;
+    constexpr bool g3 = group3_routed;
 
-    SWEEP_1(sin, base, general);      SWEEP_1(cos, base, general);
-    SWEEP_1(exp, base, general);      SWEEP_1(log, base, positive);
-    SWEEP_2(pow, base, 2.5, positive);
+    SWEEP_1(sin, g1, general);        SWEEP_1(cos, g1, general);
+    SWEEP_1(exp, g1, general);        SWEEP_1(log, g1, positive);
+    SWEEP_2(pow, pow_routed, 2.5, positive);
 
-    SWEEP_1(tan, ext, general);       SWEEP_1(atan, ext, general);
-    SWEEP_1(sinh, ext, general);      SWEEP_1(cosh, ext, general);
-    SWEEP_1(tanh, ext, general);      SWEEP_1(asinh, ext, general);
-    SWEEP_1(cbrt, ext, general);      SWEEP_1(erf, ext, general);
-    SWEEP_1(erfc, ext, general);      SWEEP_1(exp2, ext, general);
-    SWEEP_1(expm1, ext, general);     SWEEP_1(asin, ext, unit);
-    SWEEP_1(acos, ext, unit);         SWEEP_1(atanh, ext, unit);
-    SWEEP_1(acosh, ext, above_one);   SWEEP_1(log2, ext, positive);
-    SWEEP_1(log10, ext, positive);    SWEEP_1(log1p, ext, positive);
-    SWEEP_2(atan2, ext, 2, general);
+    SWEEP_1(tan, g2, general);        SWEEP_1(atan, g2, general);
+    SWEEP_1(exp2, g2, general);       SWEEP_1(expm1, g2, general);
+    SWEEP_1(asin, g2, unit);          SWEEP_1(acos, g2, unit);
+    SWEEP_1(log2, g2, positive);      SWEEP_1(log10, g2, positive);
+    SWEEP_1(log1p, g2, positive);     SWEEP_2(atan2, g2, 2, general);
+
+    SWEEP_1(sinh, g3, general);       SWEEP_1(cosh, g3, general);
+    SWEEP_1(tanh, g3, general);       SWEEP_1(asinh, g3, general);
+    SWEEP_1(cbrt, g3, general);       SWEEP_1(erf, g3, general);
+    SWEEP_1(erfc, g3, general);       SWEEP_1(atanh, g3, unit);
+    SWEEP_1(acosh, g3, above_one);
   }
 
 #undef SWEEP_1
@@ -228,7 +243,7 @@ template <typename V>
 		       VECMATH_TESTER(log));
 
 	// and the ones it grew in 2.35
-	const bool ext = vecmath and extended_routed;
+	const bool ext = vecmath and group2_routed and group3_routed;
 	FloatExceptCompare::ignore = ext;
 	vir::test::setFuzzyness<float>(ext ? 4 : 1);
 	vir::test::setFuzzyness<double>(ext ? 4 : 1);
@@ -252,9 +267,10 @@ template <typename V>
 	test_values_2arg<V>({+0., -0., 0.5, 1., 2., 3., inf, -inf, nan, norm_min, max},
 			    {5000}, VECMATH_TESTER(atan2));
 
-	FloatExceptCompare::ignore = vecmath;
-	vir::test::setFuzzyness<float>(vecmath ? 4 : 1);
-	vir::test::setFuzzyness<double>(vecmath ? 4 : 1);
+	const bool pw = vecmath and pow_routed;
+	FloatExceptCompare::ignore = pw;
+	vir::test::setFuzzyness<float>(pw ? 4 : 1);
+	vir::test::setFuzzyness<double>(pw ? 4 : 1);
 	test_values_2arg<V>({+0., -0., 0.5, 1., 2., 3., -2., inf, -inf, nan, norm_min},
 			    {2000, T(0), T(10)}, VECMATH_TESTER(pow));
 

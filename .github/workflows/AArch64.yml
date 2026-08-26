@@ -1,0 +1,66 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright © 2026 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH
+#                  Matthias Kretz <m.kretz@gsi.de>
+# Copyright © 2026 Axel Huebl <axelhuebl@lbl.gov>
+
+name: AArch64 CI
+
+on:
+  push:
+    branches: [ master, main ]
+    paths:
+      - '**.h'
+      - '**.cpp'
+      - '**.cc'
+      - '**.sh'
+      - '**Makefile'
+      - '**CMakeLists.txt'
+      - '.github/workflows/AArch64.yml'
+  pull_request:
+
+env:
+  CXX: g++
+
+jobs:
+  aarch64:
+    # The gcc/clang matrices run in x86-64 container images, so aarch64 gets its
+    # own job on the distribution toolchain instead. What it is here for:
+    # vir/simd_vecmath.h routes to glibc's AdvSIMD entry points on this
+    # architecture, and nothing else in CI compiles that path.
+    runs-on: ubuntu-24.04-arm
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: vir-simd
+
+      - name: System info
+        # The glibc version decides which functions are routed: AdvSIMD libmvec
+        # starts at 2.38, and grows in 2.39 and 2.40. Print it so a skipped
+        # routing is visible in the log rather than silent.
+        run: |
+          uname -m
+          lscpu || cat /proc/cpuinfo
+          ldd --version | head -n1
+          $CXX --version | head -n1
+          echo "--- libmvec AdvSIMD symbols available to the linker:"
+          nm -D --with-symbol-versions /lib/aarch64-linux-gnu/libmvec.so.1 2>/dev/null \
+            | grep -cE '_ZGVnN[24]v+_' || echo "no libmvec"
+
+      - name: Cache test data
+        id: cache-testdata
+        uses: actions/cache@v4
+        with:
+          path: vc-testdata
+          key: testdata-1
+          enableCrossOsArchive: true
+
+      - name: Download test data
+        if: steps.cache-testdata.outputs.cache-hit != 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: VcDevel/vc-testdata
+          path: vc-testdata
+
+      - name: Run test suite
+        run: cd vir-simd && make check DRIVEROPTS=-vvf

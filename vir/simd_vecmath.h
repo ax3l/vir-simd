@@ -27,9 +27,11 @@
  * resolves to the underlying implementation through argument-dependent
  * lookup, and no using-declaration changes that.
  *
- * The calls go to the vector entry points directly, using the x86-64 vector
- * function ABI names, so no compiler flags and no auto-vectorization are
- * involved.
+ * The calls go to the vector entry points directly, by their vector function
+ * ABI names, so no compiler flags and no auto-vectorization are involved. Two
+ * architectures are covered: x86-64, from SSE2 up to AVX-512, and AArch64
+ * AdvSIMD. Which functions are routed depends on the glibc built against, see
+ * the group macros below.
  *
  * What this costs. libmvec is built for -ffast-math callers, and glibc's own
  * test suite exercises it with errno and exception checking switched off, so
@@ -72,6 +74,19 @@
 #include <features.h>
 #endif
 
+/* Which functions a vector math library offers, per architecture
+ *
+ * glibc grew libmvec in stages and in a different order on each architecture,
+ * so the set is described as three groups plus pow rather than as one version
+ * check. A function whose group is not available here still gets a
+ * vir::vecmath overload; it simply forwards.
+ *
+ *   group 1  sin cos exp log
+ *   group 2  tan asin acos atan exp2 expm1 log2 log10 log1p atan2
+ *   group 3  sinh cosh tanh asinh acosh atanh cbrt erf erfc
+ *   pow      on its own, because the two architectures disagree about it
+ */
+
 // __ILP32__ excludes x32, where __x86_64__ is defined but the ABI is not this one
 #if defined __x86_64__ && !defined __ILP32__ && defined __GLIBC__ \
       && defined VIR_HAVE_STD_SIMD && !defined VIR_DISABLE_SIMD_VECMATH
@@ -79,14 +94,43 @@
 
 #if __GLIBC_PREREQ(2, 22)
 #define VIR_HAVE_SIMD_VECMATH 1
+#define VIR_VECMATH_GROUP1 1
+#define VIR_VECMATH_HAVE_POW 1
 #endif
 #if __GLIBC_PREREQ(2, 35)
-//! glibc 2.35 grew vector variants for everything beyond sin, cos, exp, log and pow
-#define VIR_HAVE_SIMD_VECMATH_EXTENDED 1
+// glibc 2.35 grew vector variants for everything beyond sin, cos, exp, log and pow
+#define VIR_VECMATH_GROUP2 1
+#define VIR_VECMATH_GROUP3 1
 #endif
 
 #endif // __GLIBC_PREREQ
-#endif // __x86_64__ && __GLIBC__ && VIR_HAVE_STD_SIMD
+#endif // __x86_64__
+
+/* AArch64 gets AdvSIMD only
+ *
+ * SVE is deliberately left out: its entry points are masked and
+ * vector-length-agnostic (_ZGVsMxv_), which needs an svbool_t argument and
+ * sizeless types, and neither fits the fixed-width chunking below.
+ */
+#if defined __aarch64__ && defined __GLIBC__ \
+      && defined VIR_HAVE_STD_SIMD && !defined VIR_DISABLE_SIMD_VECMATH
+#ifdef __GLIBC_PREREQ
+
+#if __GLIBC_PREREQ(2, 38)
+#define VIR_HAVE_SIMD_VECMATH 1
+#define VIR_VECMATH_GROUP1 1
+#endif
+#if __GLIBC_PREREQ(2, 39)
+#define VIR_VECMATH_GROUP2 1
+#endif
+#if __GLIBC_PREREQ(2, 40)
+#define VIR_VECMATH_GROUP3 1
+// pow arrived here rather than with group 1, unlike on x86-64
+#define VIR_VECMATH_HAVE_POW 1
+#endif
+
+#endif // __GLIBC_PREREQ
+#endif // __aarch64__
 
 #ifdef VIR_HAVE_SIMD_VECMATH
 
@@ -159,6 +203,16 @@ namespace vir::vecmath_detail
  * twice. They are still far ahead of one scalar call per lane, but a target
  * without AVX2 should not expect a true 256-bit routine.
  */
+/* The ISA letter of the 128-bit entry points: b is SSE2 on x86-64, n is AdvSIMD
+ * on AArch64. Everything wider is x86-64 only, and its blocks below are guarded
+ * by the AVX macros, which no AArch64 target defines.
+ */
+#if defined __aarch64__
+#  define VIR_VECMATH_ISA128 n
+#else
+#  define VIR_VECMATH_ISA128 b
+#endif
+
 #if defined __AVX2__
 #  define VIR_VECMATH_ISA256 d
 #else
@@ -177,6 +231,8 @@ namespace vir::vecmath_detail
 #  define VIR_VECMATH_ISA_NS isa_avx2
 #elif defined __AVX__
 #  define VIR_VECMATH_ISA_NS isa_avx
+#elif defined __aarch64__
+#  define VIR_VECMATH_ISA_NS isa_advsimd
 #else
 #  define VIR_VECMATH_ISA_NS isa_sse2
 #endif
@@ -223,18 +279,20 @@ namespace vir::vecmath_detail
 
 #define VIR_VECMATH_DECL_1(name)                                                                   \
   extern "C" {                                                                                     \
-    vir::vecmath_detail::v2d _ZGVbN2v_##name (vir::vecmath_detail::v2d);                           \
-    vir::vecmath_detail::v4f _ZGVbN4v_##name##f (vir::vecmath_detail::v4f);                        \
+    vir::vecmath_detail::v2d VIR_VECMATH_SYM(VIR_VECMATH_ISA128, N2v_##name)                       \
+      (vir::vecmath_detail::v2d);                                                                  \
+    vir::vecmath_detail::v4f VIR_VECMATH_SYM(VIR_VECMATH_ISA128, N4v_##name##f)                    \
+      (vir::vecmath_detail::v4f);                                                                  \
     VIR_VECMATH_DECL_1_256(name)                                                                   \
     VIR_VECMATH_DECL_1_512(name)                                                                   \
   }
 
 #define VIR_VECMATH_DECL_2(name)                                                                   \
   extern "C" {                                                                                     \
-    vir::vecmath_detail::v2d _ZGVbN2vv_##name (vir::vecmath_detail::v2d,                           \
-                                               vir::vecmath_detail::v2d);                          \
-    vir::vecmath_detail::v4f _ZGVbN4vv_##name##f (vir::vecmath_detail::v4f,                        \
-                                                  vir::vecmath_detail::v4f);                       \
+    vir::vecmath_detail::v2d VIR_VECMATH_SYM(VIR_VECMATH_ISA128, N2vv_##name)                      \
+      (vir::vecmath_detail::v2d, vir::vecmath_detail::v2d);                                        \
+    vir::vecmath_detail::v4f VIR_VECMATH_SYM(VIR_VECMATH_ISA128, N4vv_##name##f)                   \
+      (vir::vecmath_detail::v4f, vir::vecmath_detail::v4f);                                        \
     VIR_VECMATH_DECL_2_256(name)                                                                   \
     VIR_VECMATH_DECL_2_512(name)                                                                   \
   }
@@ -279,16 +337,20 @@ namespace vir::vecmath_detail
  */
 #define VIR_VECMATH_CALL_1(name)                                                                   \
   namespace vir::vecmath_detail { inline namespace VIR_VECMATH_ISA_NS {                            \
-    VIR_ALWAYS_INLINE v2d call_##name (v2d x) { return _ZGVbN2v_##name(x); }                       \
-    VIR_ALWAYS_INLINE v4f call_##name (v4f x) { return _ZGVbN4v_##name##f(x); }                    \
+    VIR_ALWAYS_INLINE v2d call_##name (v2d x)                                                      \
+    { return VIR_VECMATH_SYM(VIR_VECMATH_ISA128, N2v_##name)(x); }                                 \
+    VIR_ALWAYS_INLINE v4f call_##name (v4f x)                                                      \
+    { return VIR_VECMATH_SYM(VIR_VECMATH_ISA128, N4v_##name##f)(x); }                              \
     VIR_VECMATH_CALL_1_256(name)                                                                   \
     VIR_VECMATH_CALL_1_512(name)                                                                   \
   } }
 
 #define VIR_VECMATH_CALL_2(name)                                                                   \
   namespace vir::vecmath_detail { inline namespace VIR_VECMATH_ISA_NS {                            \
-    VIR_ALWAYS_INLINE v2d call_##name (v2d x, v2d y) { return _ZGVbN2vv_##name(x, y); }            \
-    VIR_ALWAYS_INLINE v4f call_##name (v4f x, v4f y) { return _ZGVbN4vv_##name##f(x, y); }         \
+    VIR_ALWAYS_INLINE v2d call_##name (v2d x, v2d y)                                               \
+    { return VIR_VECMATH_SYM(VIR_VECMATH_ISA128, N2vv_##name)(x, y); }                             \
+    VIR_ALWAYS_INLINE v4f call_##name (v4f x, v4f y)                                               \
+    { return VIR_VECMATH_SYM(VIR_VECMATH_ISA128, N4vv_##name##f)(x, y); }                          \
     VIR_VECMATH_CALL_2_256(name)                                                                   \
     VIR_VECMATH_CALL_2_512(name)                                                                   \
   } }
@@ -518,53 +580,72 @@ namespace vir::vecmath_detail
       { return vir::vecmath::name(stdx::simd<T, Abi>(static_cast<U&&>(x)), y); }                   \
   }
 
-// available since glibc 2.22
+// group 1: x86-64 since glibc 2.22, AArch64 since 2.38
+#ifdef VIR_VECMATH_GROUP1
 VIR_VECMATH_FN_1(sin)
 VIR_VECMATH_FN_1(cos)
 VIR_VECMATH_FN_1(exp)
 VIR_VECMATH_FN_1(log)
-VIR_VECMATH_FN_2(pow)
+#else
+VIR_VECMATH_FN_1_FORWARD(sin)
+VIR_VECMATH_FN_1_FORWARD(cos)
+VIR_VECMATH_FN_1_FORWARD(exp)
+VIR_VECMATH_FN_1_FORWARD(log)
+#endif
 
-#ifdef VIR_HAVE_SIMD_VECMATH_EXTENDED
+// pow: x86-64 since glibc 2.22, AArch64 only since 2.40
+#ifdef VIR_VECMATH_HAVE_POW
+VIR_VECMATH_FN_2(pow)
+#else
+VIR_VECMATH_FN_2_FORWARD(pow)
+#endif
+
+// group 2: x86-64 since glibc 2.35, AArch64 since 2.39
+#ifdef VIR_VECMATH_GROUP2
 VIR_VECMATH_FN_1(tan)
 VIR_VECMATH_FN_1(asin)
 VIR_VECMATH_FN_1(acos)
 VIR_VECMATH_FN_1(atan)
-VIR_VECMATH_FN_1(sinh)
-VIR_VECMATH_FN_1(cosh)
-VIR_VECMATH_FN_1(tanh)
-VIR_VECMATH_FN_1(asinh)
-VIR_VECMATH_FN_1(acosh)
-VIR_VECMATH_FN_1(atanh)
 VIR_VECMATH_FN_1(exp2)
 VIR_VECMATH_FN_1(expm1)
 VIR_VECMATH_FN_1(log2)
 VIR_VECMATH_FN_1(log10)
 VIR_VECMATH_FN_1(log1p)
-VIR_VECMATH_FN_1(cbrt)
-VIR_VECMATH_FN_1(erf)
-VIR_VECMATH_FN_1(erfc)
 VIR_VECMATH_FN_2(atan2)
 #else
 VIR_VECMATH_FN_1_FORWARD(tan)
 VIR_VECMATH_FN_1_FORWARD(asin)
 VIR_VECMATH_FN_1_FORWARD(acos)
 VIR_VECMATH_FN_1_FORWARD(atan)
+VIR_VECMATH_FN_1_FORWARD(exp2)
+VIR_VECMATH_FN_1_FORWARD(expm1)
+VIR_VECMATH_FN_1_FORWARD(log2)
+VIR_VECMATH_FN_1_FORWARD(log10)
+VIR_VECMATH_FN_1_FORWARD(log1p)
+VIR_VECMATH_FN_2_FORWARD(atan2)
+#endif
+
+// group 3: x86-64 since glibc 2.35, AArch64 since 2.40
+#ifdef VIR_VECMATH_GROUP3
+VIR_VECMATH_FN_1(sinh)
+VIR_VECMATH_FN_1(cosh)
+VIR_VECMATH_FN_1(tanh)
+VIR_VECMATH_FN_1(asinh)
+VIR_VECMATH_FN_1(acosh)
+VIR_VECMATH_FN_1(atanh)
+VIR_VECMATH_FN_1(cbrt)
+VIR_VECMATH_FN_1(erf)
+VIR_VECMATH_FN_1(erfc)
+#else
 VIR_VECMATH_FN_1_FORWARD(sinh)
 VIR_VECMATH_FN_1_FORWARD(cosh)
 VIR_VECMATH_FN_1_FORWARD(tanh)
 VIR_VECMATH_FN_1_FORWARD(asinh)
 VIR_VECMATH_FN_1_FORWARD(acosh)
 VIR_VECMATH_FN_1_FORWARD(atanh)
-VIR_VECMATH_FN_1_FORWARD(exp2)
-VIR_VECMATH_FN_1_FORWARD(expm1)
-VIR_VECMATH_FN_1_FORWARD(log2)
-VIR_VECMATH_FN_1_FORWARD(log10)
-VIR_VECMATH_FN_1_FORWARD(log1p)
 VIR_VECMATH_FN_1_FORWARD(cbrt)
 VIR_VECMATH_FN_1_FORWARD(erf)
 VIR_VECMATH_FN_1_FORWARD(erfc)
-VIR_VECMATH_FN_2_FORWARD(atan2)
 #endif
 
 /* Deliberately not routed here:
